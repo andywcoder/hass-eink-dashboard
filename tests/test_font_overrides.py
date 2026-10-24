@@ -226,6 +226,82 @@ class TestAvailableSizes:
             assert available_sizes((9, 10, 11, 12)) == [9, 10, 11, 12]
 
 
+class TestAnchorSnap:
+    def _font(self, font_dir: Path) -> ImageFont.FreeTypeFont:
+        """Open the installed copy at the 14 px override size."""
+        return ImageFont.truetype(str(font_dir / "Copy.ttf"), 14)
+
+    def _apply(self, font_dir: Path, tag: str, text: str = "Hello 1") -> str:
+        """Apply a 14 px override to ``<text {tag}>text</text>``."""
+        svg = f"<svg><text {tag}>{text}</text></svg>"
+        settings = FontSettings(
+            font_dir=str(font_dir), size_overrides={14: "Roboto"}
+        )
+        return apply_font_families(svg, settings)
+
+    def test_centred_text_starts_on_a_whole_pixel(
+        self, font_dir: Path
+    ) -> None:
+        # Centred text begins half its width left of x, a half pixel for
+        # odd widths, which blurs bitmap fonts.  The start is rounded to
+        # a whole pixel and the anchor becomes the default start.
+        width = self._font(font_dir).getlength("Hello 1")
+        out = self._apply(
+            font_dir,
+            'x="50" y="30" font-family="Roboto" font-size="14" '
+            'text-anchor="middle"',
+        )
+
+        assert "text-anchor" not in out
+        assert f'x="{math.floor(50 - width / 2 + 0.5)}"' in out
+
+    def test_right_aligned_text_starts_on_a_whole_pixel(
+        self, font_dir: Path
+    ) -> None:
+        # Right-aligned text begins one width left of x.
+        width = self._font(font_dir).getlength("Hello 1")
+        out = self._apply(
+            font_dir,
+            'x="120.5" y="30" font-family="Roboto" font-size="14" '
+            'text-anchor="end"',
+        )
+
+        assert "text-anchor" not in out
+        assert f'x="{math.floor(120.5 - width + 0.5)}"' in out
+
+    def test_start_anchored_text_is_untouched(self, font_dir: Path) -> None:
+        # Text that already starts at x needs no change.
+        tag = 'x="50" y="30" font-family="Roboto" font-size="14"'
+        out = self._apply(font_dir, tag)
+
+        assert 'x="50"' in out
+
+    def test_other_sizes_keep_their_anchor(self, font_dir: Path) -> None:
+        # Text above the override sizes is not drawn in a bitmap font,
+        # so its anchor stays.
+        out = self._apply(
+            font_dir,
+            'x="50" y="30" font-family="Roboto" font-size="20" '
+            'text-anchor="middle"',
+        )
+
+        assert 'text-anchor="middle"' in out
+
+    def test_text_mixing_in_roboto_keeps_its_anchor(
+        self, font_dir: Path
+    ) -> None:
+        # A run in Roboto inside the element cannot be measured with the
+        # override font, so the element is left as it is.
+        out = self._apply(
+            font_dir,
+            'x="50" y="30" font-family="Roboto" font-size="14" '
+            'text-anchor="middle"',
+            text='ab<tspan font-family="Roboto" font-size="30">c</tspan>',
+        )
+
+        assert 'text-anchor="middle"' in out
+
+
 class TestSnapSize:
     def _settings(self, font_dir: Path, *sizes: int, **kwargs: Any) -> Any:
         """Return settings with an installed override font per size."""

@@ -96,6 +96,11 @@ _FAMILY_ATTR = 'font-family="Roboto"'
 _ANY_FAMILY_ATTR = re.compile(r'font-family="[^"]*"')
 _SIZE_ATTR = re.compile(r'font-size="([0-9]+(?:\.[0-9]+)?)(?:px)?"')
 _BASELINE_ATTR = re.compile(r'\s*dominant-baseline="(middle|central)"')
+# Font of the text inside a tag while rewriting: size, family and weight.
+Spec = tuple[float | None, str, int]
+_WEIGHT_ATTR = re.compile(r'font-weight="(\w+)"')
+_ANCHOR_ATTR = re.compile(r'\s*text-anchor="(middle|end)"')
+_X_ATTR = re.compile(r'(\sx=")(-?[0-9.]+)(")')
 _Y_ATTR = re.compile(r'(\sy=")(-?[0-9.]+)(")')
 
 
@@ -604,6 +609,81 @@ def _snap_baseline(tag: str, family: str, size: float, font_dir: str) -> str:
     )
 
 
+def _css_weight(value: str, default: int) -> int:
+    """Return the numeric value of a ``font-weight`` attribute."""
+    if value in ("bold", "bolder"):
+        return 700
+    if value == "normal":
+        return 400
+    return int(value) if value.isdigit() else default
+
+
+@functools.lru_cache(maxsize=256)
+def _open_font(path: str, size: int) -> ImageFont.FreeTypeFont:
+    """Open a font file at a pixel size (cached)."""
+    return ImageFont.truetype(path, size)
+
+
+def _text_width(
+    text: str, family: str, size: float, weight: int, font_dir: str
+) -> float | None:
+    """Return the width in pixels of ``text`` drawn in an installed family.
+
+    Uses the file the renderer picks for the weight, and measures at the
+    drawn size, where a bitmap font has whole-pixel advances.
+
+    Args:
+        text: Plain (unescaped) text.
+        family: The chosen family.
+        size: Font size in pixels.
+        weight: CSS font weight of the text.
+        font_dir: Directory the family is installed in.
+
+    Returns:
+        The width, or ``None`` when the family cannot be read.
+    """
+    weights = _font_index(font_dir).get(family.lower()) if font_dir else None
+    if not weights:
+        return None
+    wanted = 700 if weight >= 600 else 500 if weight == 500 else 400
+    path = (
+        weights.get(wanted) or weights.get(400) or next(iter(weights.values()))
+    )
+    try:
+        return _open_font(path, round(size)).getlength(text)
+    except (OSError, ValueError):
+        return None
+
+
+def _snap_anchor(tag: str, width: float) -> str:
+    """Start centred or right-aligned text on a whole pixel.
+
+    Text with ``text-anchor`` ``middle`` or ``end`` begins at ``x`` minus
+    half its width or its width, which is a half pixel whenever the
+    width is odd.  Bitmap fonts blur on half pixels, and proportional
+    ones have a different width for every text, so only some of them
+    would.  The anchor is replaced by the whole-pixel start position.
+
+    Args:
+        tag: Opening ``<text>`` tag.
+        width: Width of the text in pixels.
+
+    Returns:
+        The tag with a start anchor and a rounded ``x``, or unchanged
+        when it has no such anchor or no numeric ``x``.
+    """
+    anchor = _ANCHOR_ATTR.search(tag)
+    x_attr = _X_ATTR.search(tag)
+    if not anchor or not x_attr:
+        return tag
+    shift = width / 2 if anchor.group(1) == "middle" else width
+    start = math.floor(float(x_attr.group(2)) - shift + 0.5)
+    tag = _ANCHOR_ATTR.sub("", tag, count=1)
+    return _X_ATTR.sub(
+        lambda m: f"{m.group(1)}{start}{m.group(3)}", tag, count=1
+    )
+
+
 def apply_font_families(svg: str, settings: FontSettings) -> str:
     """Replace the Roboto font family of text by the chosen families.
 
@@ -612,8 +692,9 @@ def apply_font_families(svg: str, settings: FontSettings) -> str:
     installed font has no glyph for are replaced by a plain look-alike
     or removed, see :func:`_fit_to_font`.  The font size is snapped to a
     size with an installed override font, see :func:`snap_size`.  Text
-    with a centred baseline gets a whole-pixel baseline so bitmap fonts
-    stay sharp, see :func:`_snap_baseline`.
+    with a centred baseline gets a whole-pixel baseline, and centred or
+    right-aligned text a whole-pixel start, so bitmap fonts stay sharp,
+    see :func:`_snap_baseline` and :func:`_snap_anchor`.
 
     Args:
         svg: Rendered widget SVG whose text uses ``font-family="Roboto"``.
@@ -627,16 +708,20 @@ def apply_font_families(svg: str, settings: FontSettings) -> str:
         return svg
     native = _native_sizes(settings)
 
-    def rewrite_tag(
-        tag: str, parent: tuple[float | None, str]
-    ) -> tuple[str, tuple[float | None, str]]:
+    def rewrite_tag(tag: str, parent: Spec) -> tuple[str, Spec]:
         """Return the tag with its family replaced and its font spec.
 
-        The spec is ``(size, family)`` of the text inside the tag,
-        where family is ``""`` when it is Roboto or unchanged.
+        The spec is ``(size, family, weight)`` of the text inside the
+        tag, where family is ``""`` when it is Roboto or unchanged.
         """
         size_match = _SIZE_ATTR.search(tag)
         size = float(size_match.group(1)) if size_match else parent[0]
+        weight_match = _WEIGHT_ATTR.search(tag)
+        weight = (
+            _css_weight(weight_match.group(1), parent[2])
+            if weight_match
+            else parent[2]
+        )
         if _FAMILY_ATTR in tag and size is not None:
             snapped = _snap(round(size), native)
             if snapped != round(size):
@@ -648,16 +733,20 @@ def apply_font_families(svg: str, settings: FontSettings) -> str:
                     _FAMILY_ATTR, f"font-family=\"'{family}', Roboto\""
                 )
                 tag = _snap_baseline(tag, family, size, settings.font_dir)
-                return tag, (size, family)
-            return tag, (size, "")
+                return tag, (size, family, weight)
+            return tag, (size, "", weight)
         if _ANY_FAMILY_ATTR.search(tag):
-            return tag, (size, "")
-        return tag, (size, parent[1])
+            return tag, (size, "", weight)
+        return tag, (size, parent[1], weight)
 
     def rewrite_element(match: re.Match[str]) -> str:
         """Return one ``<text>`` element with fonts and fallbacks applied."""
-        stack: list[tuple[float | None, str]] = [(None, "")]
+        stack: list[Spec] = [(None, "", 400)]
         out: list[str] = []
+        open_at: int | None = None
+        width = 0.0
+        # The start can only be snapped when every text is measurable.
+        measurable = True
         for part in _MARKUP_PART.split(match.group(0)):
             if part.startswith("</"):
                 out.append(part)
@@ -665,18 +754,34 @@ def apply_font_families(svg: str, settings: FontSettings) -> str:
                     stack.pop()
             elif part.startswith("<"):
                 tag, spec = rewrite_tag(part, stack[-1])
+                if open_at is None:
+                    open_at = len(out)
                 out.append(tag)
                 if not part.endswith("/>"):
                     stack.append(spec)
             elif part and stack[-1][1]:
-                out.append(
-                    _fit_to_font(
-                        part,
-                        _family_codepoints(stack[-1][1], settings.font_dir),
-                    )
+                size, family, weight = stack[-1]
+                fitted = _fit_to_font(
+                    part, _family_codepoints(family, settings.font_dir)
                 )
+                out.append(fitted)
+                run = _text_width(
+                    html.unescape(fitted),
+                    family,
+                    size or 0,
+                    weight,
+                    settings.font_dir,
+                )
+                if run is None:
+                    measurable = False
+                else:
+                    width += run
             else:
                 out.append(part)
+                if part.strip():
+                    measurable = False
+        if open_at is not None and measurable and width > 0:
+            out[open_at] = _snap_anchor(out[open_at], width)
         return "".join(out)
 
     return _TEXT_ELEMENT.sub(rewrite_element, svg)
