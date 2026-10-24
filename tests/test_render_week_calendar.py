@@ -17,9 +17,15 @@
 from __future__ import annotations
 
 import datetime as dt
-from typing import Any
+import shutil
+from typing import TYPE_CHECKING, Any
 from unittest.mock import patch
 
+from custom_components.eink_dashboard.font_overrides import (
+    FontSettings,
+    use_font_settings,
+)
+from custom_components.eink_dashboard.render import _FONTS_DIR
 from custom_components.eink_dashboard.svg_render import render_widget_svg
 from custom_components.eink_dashboard.widgets.week_calendar import (
     _build_week_calendar_context,
@@ -31,6 +37,9 @@ from tests.helpers import (
     assert_has_dark_pixels,
     render_to_image,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 _NOW = "custom_components.eink_dashboard.widgets.week_calendar._now"
 # Monday 2026-10-19, 10:15.
@@ -87,6 +96,82 @@ def _ctx(
         return _build_week_calendar_context(
             widget or _widget(), _config(events, **cfg)
         )
+
+
+class TestEventTextSizes:
+    """Choosing the event text sizes from the sizes the fonts have."""
+
+    _LONG = "Quarterly planning workshop with the whole team"
+
+    def _sizes(
+        self, tmp_path: Path, *sizes: int, family: str = "Roboto"
+    ) -> FontSettings:
+        """Return settings with an installed font for each of ``sizes``."""
+        shutil.copy(_FONTS_DIR / "Roboto-Bold.ttf", tmp_path / "Copy.ttf")
+        return FontSettings(
+            font_dir=str(tmp_path), size_overrides=dict.fromkeys(sizes, family)
+        )
+
+    def _event_size(self, title: str) -> int:
+        """Return the title font size chosen for a one-hour event."""
+        ev = _ev("2026-10-19T09:00:00", "2026-10-19T10:00:00", title)
+        return _ctx([ev])["events"][0]["font_sz"]
+
+    def _time_size(self) -> int:
+        """Return the start time font size."""
+        return _ctx([])["time_font_sz"]
+
+    def test_defaults_without_override_fonts(self) -> None:
+        # Without override fonts every size exists: the time uses the
+        # smallest of 9 to 12 and a short title the largest, 14.
+        assert self._time_size() == 9
+        assert self._event_size("Gym") == 14
+
+    def test_time_uses_smallest_available_size(self, tmp_path: Path) -> None:
+        # A font with 11, 12 and 14 px has no 9 or 10 px, so the start
+        # time takes the smallest size it does have.
+        with use_font_settings(self._sizes(tmp_path, 11, 12, 14)):
+            assert self._time_size() == 11
+
+    def test_title_prefers_the_largest_available_size(
+        self, tmp_path: Path
+    ) -> None:
+        # A font without 14 px but with 12 and 13 px draws a short
+        # title in the larger of the two.
+        with use_font_settings(self._sizes(tmp_path, 9, 12, 13)):
+            assert self._event_size("Gym") == 13
+
+    def test_title_steps_down_through_available_sizes(
+        self, tmp_path: Path
+    ) -> None:
+        # A title that is cut at 14 px moves to the next available
+        # size, skipping 13 px when the font has none.
+        with use_font_settings(self._sizes(tmp_path, 9, 12, 14)):
+            assert self._event_size("Gym") == 14
+            assert self._event_size(self._LONG) == 12
+
+    def test_title_steps_down_to_11_px(self, tmp_path: Path) -> None:
+        # A font with 9, 11 and 13 px draws a short title at 13 px and
+        # a long one that is cut at 13 px at 11 px, the last step of
+        # the title group (14, 13, 12, 11).
+        with use_font_settings(self._sizes(tmp_path, 9, 11, 13)):
+            assert self._event_size("Gym") == 13
+            assert self._event_size(self._LONG) == 11
+
+    def test_title_keeps_its_only_size(self, tmp_path: Path) -> None:
+        # A font with 14 px but no 12 or 13 px keeps 14 px for a long
+        # title, which is cut instead of switching to another size.
+        with use_font_settings(self._sizes(tmp_path, 9, 14)):
+            assert self._event_size(self._LONG) == 14
+
+    def test_uninstalled_fonts_do_not_restrict_sizes(
+        self, tmp_path: Path
+    ) -> None:
+        # Overrides for a font that is not installed leave all sizes
+        # available, so the defaults apply.
+        with use_font_settings(self._sizes(tmp_path, 11, 13, family="Nope")):
+            assert self._time_size() == 9
+            assert self._event_size("Gym") == 14
 
 
 class TestFirstWeekday:
@@ -215,14 +300,17 @@ class TestWeekEvents:
         events = [_ev("2026-10-19T09:00:00", "2026-10-19T10:00:00", "Solo")]
         with patch(_NOW, return_value=_MONDAY):
             svg = render_widget_svg(_widget(), _config(events))
-        assert '<tspan font-size="9">9:00</tspan> Solo</text>' in svg
+        assert (
+            '<tspan font-family="Roboto" font-size="9">9:00</tspan>'
+            " Solo</text>" in svg
+        )
         assert 'font-family="Roboto"\n  font-size="14"' in svg
         assert "text-rendering" not in svg
         assert 'font-weight="700"' not in svg
 
     def test_title_uses_largest_size_that_fits(self) -> None:
         # A short title fits the large font; a long one that would be
-        # cut at the large size is drawn in the smaller font instead.
+        # cut at 14, 13 and 12 px is drawn at the smallest size, 11 px.
         short = _ctx(
             [_ev("2026-10-19T09:00:00", "2026-10-19T10:00:00", "Gym")]
         )
@@ -231,7 +319,7 @@ class TestWeekEvents:
         long = _ctx(
             [_ev("2026-10-19T09:00:00", "2026-10-19T10:00:00", long_title)]
         )
-        assert long["events"][0]["font_sz"] == 12
+        assert long["events"][0]["font_sz"] == 11
 
     def test_cut_text_ends_in_ellipsis(self) -> None:
         # A title that does not fit even at the smallest size is cut

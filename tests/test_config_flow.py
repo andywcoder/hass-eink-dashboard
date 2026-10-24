@@ -25,6 +25,11 @@ from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.eink_dashboard.config_flow import (
+    _advanced_field_names,
+    _build_display_settings_schema,
+    _font_field_names,
+)
 from custom_components.eink_dashboard.const import DOMAIN
 
 if TYPE_CHECKING:
@@ -84,6 +89,19 @@ async def _make_options_flow(
     # path that exercises async_finish_flow and real
     # async_update_entry.
     return hass.config_entries.options._progress[result["flow_id"]]
+
+
+def _section_keys(schema: Any) -> list[Any]:
+    """Return the field keys of the Advanced section, in form order."""
+    for key, value in schema.schema.items():
+        if getattr(key, "schema", None) == "advanced_section":
+            return list(value.schema.schema)
+    return []
+
+
+def _section_field_order(schema: Any) -> list[str]:
+    """Return the field names of the Advanced section, in form order."""
+    return [k.schema for k in _section_keys(schema)]
 
 
 class TestEinkDashboardConfigFlow:
@@ -830,6 +848,186 @@ class TestEinkDashboardOptionsFlow:
             await flow.async_step_display_settings(
                 {"update_interval": 60, "display_levels": 7}
             )
+
+    async def test_init_menu_has_no_font_override_steps(
+        self, hass: HomeAssistant
+    ) -> None:
+        # Font overrides are edited in the display settings form, so the
+        # options menu has no steps for them, even when they are on.
+        flow = await _make_options_flow(hass, {"override_font_sizes": True})
+        result = await flow.async_step_init(None)
+
+        assert not [m for m in result["menu_options"] if "font" in m]
+
+    def test_font_boxes_hidden_until_checkbox_is_on(self) -> None:
+        # The font text boxes only exist in the form while the checkbox
+        # is on.
+        off = _build_display_settings_schema({"override_font_sizes": False})
+        on = _build_display_settings_schema({"override_font_sizes": True})
+
+        assert _font_field_names(off) == set()
+        assert _font_field_names(on) == {
+            *(f"font_size_{n}" for n in range(8, 21)),
+            "font_family",
+        }
+
+    def test_font_overrides_are_in_the_advanced_section(self) -> None:
+        # The checkbox and the boxes live in the Advanced section, after
+        # the custom font directory, with sizes 8 to 20 in order and
+        # the fallback family last; nothing is left at the top level.
+        schema = _build_display_settings_schema({"override_font_sizes": True})
+        top = {k.schema for k in schema.schema}
+        names = _section_field_order(schema)
+
+        assert not top & {"override_font_sizes", "font_family", "font_size_8"}
+        assert names[:2] == ["font_dir", "override_font_sizes"]
+        assert names[2:16] == [
+            *(f"font_size_{n}" for n in range(8, 21)),
+            "font_family",
+        ]
+
+    def test_font_boxes_are_prefilled_from_stored_overrides(self) -> None:
+        # Stored overrides and the fallback family are the suggested
+        # values of their boxes.
+        schema = _build_display_settings_schema(
+            {
+                "override_font_sizes": True,
+                "font_family": "Inter",
+                "font_size_overrides": [{"size": 14, "family": "Tamzen 7x14"}],
+            }
+        )
+        suggested = {
+            k.schema: (k.description or {}).get("suggested_value")
+            for k in _section_keys(schema)
+        }
+
+        assert suggested["font_size_14"] == "Tamzen 7x14"
+        assert suggested["font_size_9"] == ""
+        assert suggested["font_family"] == "Inter"
+
+    async def test_display_settings_ticking_checkbox_shows_font_boxes(
+        self, hass: HomeAssistant
+    ) -> None:
+        # Ticking the checkbox shows the form again with the font boxes
+        # (Advanced section expanded) instead of saving, like newly
+        # revealed e-ink fields.
+        flow = await _make_options_flow(hass, {"update_interval": 60})
+        result = await flow.async_step_display_settings(
+            {
+                "update_interval": 60,
+                "advanced_section": {"override_font_sizes": True},
+            }
+        )
+
+        assert result["type"] is FlowResultType.FORM
+        assert "font_size_14" in _advanced_field_names(result["data_schema"])
+        note = result["description_placeholders"]["optimize_note"]
+        assert "Font boxes" in note
+        assert "e-ink settings" not in note
+
+    async def test_display_settings_saves_font_boxes(
+        self, hass: HomeAssistant
+    ) -> None:
+        # Filled boxes become the stored per-size families, in size
+        # order, and the fallback box becomes the fallback family.
+        flow = await _make_options_flow(
+            hass, {"update_interval": 60, "override_font_sizes": True}
+        )
+        result = await flow.async_step_display_settings(
+            {
+                "update_interval": 60,
+                "advanced_section": {
+                    "override_font_sizes": True,
+                    "font_size_14": "Tamzen 7x14",
+                    "font_size_9": " Tamzen 5x9 ",
+                    "font_family": "Inter",
+                },
+            }
+        )
+
+        assert result["type"] is FlowResultType.CREATE_ENTRY
+        assert result["data"]["override_font_sizes"] is True
+        assert result["data"]["font_family"] == "Inter"
+        assert result["data"]["font_size_overrides"] == [
+            {"size": 9, "family": "Tamzen 5x9"},
+            {"size": 14, "family": "Tamzen 7x14"},
+        ]
+        # The boxes are not stored as options of their own.
+        assert not [
+            k
+            for k in result["data"]
+            if k.startswith("font_size_") and k != "font_size_overrides"
+        ]
+
+    async def test_display_settings_cleared_box_removes_override(
+        self, hass: HomeAssistant
+    ) -> None:
+        # A box that is emptied is left out of the submission and its
+        # stored override and the fallback family are removed.
+        flow = await _make_options_flow(
+            hass,
+            {
+                "update_interval": 60,
+                "override_font_sizes": True,
+                "font_family": "Inter",
+                "font_size_overrides": [
+                    {"size": 9, "family": "A"},
+                    {"size": 14, "family": "B"},
+                ],
+            },
+        )
+        result = await flow.async_step_display_settings(
+            {
+                "update_interval": 60,
+                "advanced_section": {
+                    "override_font_sizes": True,
+                    "font_size_14": "B",
+                },
+            }
+        )
+
+        assert result["data"]["font_size_overrides"] == [
+            {"size": 14, "family": "B"}
+        ]
+        assert result["data"]["font_family"] == ""
+
+    async def test_display_settings_keeps_overrides_while_checkbox_is_off(
+        self, hass: HomeAssistant
+    ) -> None:
+        # With the checkbox off the boxes are not shown, so saving the
+        # form leaves the stored overrides alone for later.
+        stored = [{"size": 14, "family": "Tamzen 7x14"}]
+        flow = await _make_options_flow(
+            hass, {"update_interval": 60, "font_size_overrides": stored}
+        )
+        result = await flow.async_step_display_settings(
+            {"update_interval": 60}
+        )
+
+        assert result["type"] is FlowResultType.CREATE_ENTRY
+        assert result["data"]["font_size_overrides"] == stored
+
+    @pytest.mark.parametrize("field", ["font_size_14", "font_family"])
+    async def test_display_settings_rejects_invalid_font_family(
+        self, hass: HomeAssistant, field: str
+    ) -> None:
+        # A family name with quote characters returns the form again
+        # with a base-level error instead of saving.
+        flow = await _make_options_flow(
+            hass, {"update_interval": 60, "override_font_sizes": True}
+        )
+        result = await flow.async_step_display_settings(
+            {
+                "update_interval": 60,
+                "advanced_section": {
+                    "override_font_sizes": True,
+                    field: 'In"ter',
+                },
+            }
+        )
+
+        assert result["type"] is FlowResultType.FORM
+        assert result["errors"] == {"base": "invalid_font_family"}
 
     async def test_display_settings_saves_font_dir(
         self,

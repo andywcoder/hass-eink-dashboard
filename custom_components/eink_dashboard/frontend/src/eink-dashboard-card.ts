@@ -35,6 +35,7 @@ import {
   scaleSvgPreview,
   clearSvgScale,
 } from "./resize-math.js";
+import { browserFontDeps, loadFonts } from "./font-loader.js";
 
 const CARD_TAG = "eink-dashboard-card";
 const PADDING = 24;
@@ -98,6 +99,8 @@ class EinkDashboardCard extends HTMLElement {
   private _config: CardConfig | null = null;
   private _hass: HomeAssistant | null = null;
   private _layout: LayoutResponse | null = null;
+  // Keys of the font files already loaded into the page (see font-loader).
+  private _loadedFonts = new Set<string>();
   private _connected = false;
   // Guards layout fetch only
   private _fetching = false;
@@ -527,6 +530,13 @@ class EinkDashboardCard extends HTMLElement {
       );
       if (gen !== this._fetchGeneration) return;
       this._layout = resp;
+      // Load the chosen fonts before the SVGs are inserted so the text
+      // is not laid out in the fallback font first.
+      const fontDeps = browserFontDeps(this._hass!, entryId);
+      if (fontDeps) {
+        await loadFonts(entryId, resp.display.fonts, this._loadedFonts, fontDeps);
+        if (gen !== this._fetchGeneration) return;
+      }
       this._headerEl.textContent = buildHeaderText(resp.device);
       this._copyBtn.style.display = shouldShowCopyUrl(
         resp.device.model,

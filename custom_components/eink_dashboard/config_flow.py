@@ -71,8 +71,18 @@ from .const import (
     apply_screen_portion,
     resolve_display,
 )
+from .font_overrides import is_valid_family
 
 _POSITIVE_INT = vol.All(int, vol.Range(min=1))
+
+# Font sizes in pixels that get a font text box once "Override fonts for
+# specific sizes" is on.
+_FONT_SIZES = range(8, 21)
+# Form fields of the font override boxes: one per size plus the family
+# for every other size.
+_FONT_FIELDS = frozenset(
+    {"font_family"} | {f"font_size_{n}" for n in _FONT_SIZES}
+)
 
 # Sentinel value used as the first option in each locale selector.
 # HA translation keys must match [a-z0-9-_]+, so an empty string is
@@ -195,8 +205,10 @@ def _build_advanced_section(
 ) -> Any:
     """Build the collapsed Advanced section of the display settings form.
 
-    ``font_dir`` is always present since it is unrelated to e-ink
-    optimization. The remaining fields (dither_algorithm,
+    ``font_dir`` and the font override checkbox are always present
+    since they are unrelated to e-ink optimization; the per-size font
+    boxes and the fallback family follow the checkbox once it is on.
+    The remaining fields (dither_algorithm,
     measured_palette, exposure, saturation) only affect
     ``optimize_for_eink()``, which early-returns when optimize is off,
     so they are omitted from the section until optimize is enabled.
@@ -213,7 +225,8 @@ def _build_advanced_section(
             collapsed.
 
     Returns:
-        A voluptuous section wrapping font_dir and, once optimize is
+        A voluptuous section wrapping font_dir, the font override
+        checkbox with its boxes (while it is on) and, once optimize is
         enabled, dither_algorithm, measured_palette, and (unless
         display_levels == 256) exposure and saturation.
     """
@@ -222,7 +235,15 @@ def _build_advanced_section(
             "font_dir",
             description={"suggested_value": opts.get("font_dir", "")},
         ): TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT)),
+        vol.Optional(
+            "override_font_sizes",
+            default=opts.get("override_font_sizes", False),
+        ): bool,
     }
+    # The font boxes only exist while the checkbox is on; the form is
+    # shown again when a submission turns it on.
+    if opts.get("override_font_sizes"):
+        advanced_fields.update(_font_override_fields(opts))
     if optimize:
         advanced_fields[
             vol.Optional(
@@ -289,6 +310,49 @@ def _advanced_field_names(schema: vol.Schema) -> set[str]:
     return set()
 
 
+def _font_field_names(schema: vol.Schema) -> set[str]:
+    """Return the font override fields present in a display settings form."""
+    return _advanced_field_names(schema) & _FONT_FIELDS
+
+
+def _eink_field_names(schema: vol.Schema) -> set[str]:
+    """Return the Advanced fields that are not font override fields."""
+    return _advanced_field_names(schema) - _FONT_FIELDS
+
+
+def _font_override_fields(opts: Mapping[str, Any]) -> dict[Any, Any]:
+    """Build the font text boxes shown under the override checkbox.
+
+    Args:
+        opts: Option values; the stored per-size families and the
+            fallback family are the suggested values.
+
+    Returns:
+        One text box per size in ``_FONT_SIZES`` labelled with the
+        size, followed by the family used for text larger than the
+        biggest of those sizes.
+    """
+    stored = {
+        int(o["size"]): o["family"]
+        for o in opts.get("font_size_overrides", [])
+    }
+    fields: dict[Any, Any] = {}
+    for size in _FONT_SIZES:
+        fields[
+            vol.Optional(
+                f"font_size_{size}",
+                description={"suggested_value": stored.get(size, "")},
+            )
+        ] = TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT))
+    fields[
+        vol.Optional(
+            "font_family",
+            description={"suggested_value": opts.get("font_family", "")},
+        )
+    ] = TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT))
+    return fields
+
+
 def _build_display_settings_schema(
     opts: Mapping[str, Any], expand_advanced: bool = False
 ) -> vol.Schema:
@@ -330,9 +394,10 @@ def _build_display_settings_schema(
                 "use_system_fonts",
                 default=opts.get("use_system_fonts", DEFAULT_USE_SYSTEM_FONTS),
             ): bool,
-            # font_dir lives in the Advanced section (built below) since
-            # it is a power-user field; the section itself is always
-            # present so font support does not depend on optimize.
+            # font_dir and the font overrides live in the Advanced
+            # section (built below) since they are power-user fields;
+            # the section itself is always present so font support does
+            # not depend on optimize.
             vol.Optional("advanced_section"): _build_advanced_section(
                 opts, display_levels, optimize, expand_advanced
             ),
@@ -1342,14 +1407,18 @@ class EinkDashboardOptionsFlow(OptionsFlow):
         Also collects ``use_system_fonts`` (top-level, off by default)
         and, via the Advanced section, ``font_dir`` — both add glyph
         fallback fonts for scripts the bundled Roboto font does not
-        cover, such as Hebrew, Arabic, or CJK. See docs/fonts.md.
+        cover, such as Hebrew, Arabic, or CJK.  The Advanced
+        ``override_font_sizes`` checkbox shows one text box per font
+        size (``font_size_<px>``) and a ``font_family`` for larger
+        text, which choose other fonts than Roboto. See docs/fonts.md.
 
         HA forms are static, so fields that depend on ``optimize`` or
         ``display_levels`` cannot appear while the user edits the form.
         When a submission would reveal new Advanced fields (e.g.
         optimize was just enabled), the form is shown again with the
         submitted values pre-filled and the Advanced section expanded
-        instead of saving, so those fields can be reviewed first.
+        instead of saving, so those fields can be reviewed first.  The
+        same happens when the font override checkbox was just ticked.
         """
         # After a re-show, validate against the schema that was actually
         # displayed (built from the earlier submission), not the stale
@@ -1381,17 +1450,45 @@ class EinkDashboardOptionsFlow(OptionsFlow):
                     errors={"base": "font_dir_not_found"},
                     description_placeholders={"optimize_note": optimize_note},
                 )
+            fonts = {
+                k: str(section.pop(k)).strip()
+                for k in _FONT_FIELDS
+                if k in section
+            }
+            if not all(is_valid_family(v) for v in fonts.values() if v):
+                return self.async_show_form(
+                    step_id="display_settings",
+                    data_schema=schema,
+                    errors={"base": "invalid_font_family"},
+                    description_placeholders={"optimize_note": optimize_note},
+                )
             new_opts = {**opts, **validated, **section}
+            if fonts:
+                # A cleared text box is left out of the submission, so
+                # the stored fonts are rebuilt from the boxes shown.
+                new_opts["font_family"] = fonts.get("font_family", "")
+                new_opts["font_size_overrides"] = [
+                    {"size": n, "family": fonts[f"font_size_{n}"]}
+                    for n in _FONT_SIZES
+                    if fonts.get(f"font_size_{n}")
+                ]
             new_schema = _build_display_settings_schema(
                 new_opts, expand_advanced=True
             )
-            if _advanced_field_names(new_schema) - _advanced_field_names(
-                schema
-            ):
-                note = (
+            notes = []
+            if _eink_field_names(new_schema) - _eink_field_names(schema):
+                notes.append(
                     "More e-ink settings are now available in the"
-                    " Advanced section. Review them and submit again"
-                    " to save."
+                    " Advanced section."
+                )
+            if _font_field_names(new_schema) - _font_field_names(schema):
+                notes.append(
+                    "Font boxes for each text size are now available"
+                    " under the checkbox in the Advanced section."
+                )
+            if notes:
+                note = (
+                    " ".join(notes) + " Review them and submit again to save."
                 )
                 self._display_settings_opts = new_opts
                 return self.async_show_form(

@@ -172,6 +172,21 @@
             "name": "Advanced",
             "data": {
               "font_dir": "Custom font directory",
+              "override_font_sizes": "Override fonts for specific sizes",
+              "font_size_8": "Font for 8 px text",
+              "font_size_9": "Font for 9 px text",
+              "font_size_10": "Font for 10 px text",
+              "font_size_11": "Font for 11 px text",
+              "font_size_12": "Font for 12 px text",
+              "font_size_13": "Font for 13 px text",
+              "font_size_14": "Font for 14 px text",
+              "font_size_15": "Font for 15 px text",
+              "font_size_16": "Font for 16 px text",
+              "font_size_17": "Font for 17 px text",
+              "font_size_18": "Font for 18 px text",
+              "font_size_19": "Font for 19 px text",
+              "font_size_20": "Font for 20 px text",
+              "font_family": "Font for larger text",
               "dither_algorithm": "Dither algorithm",
               "measured_palette": "Measured palette",
               "exposure": "Exposure",
@@ -179,6 +194,8 @@
             },
             "data_description": {
               "font_dir": "Path to a directory containing additional font files (.ttf/.otf) for scripts the bundled Roboto font does not cover, such as Hebrew, Arabic, or CJK. The directory must be reachable by Home Assistant (mount it into the container on HA OS or Docker). Leave empty to use only the bundled font.",
+              "override_font_sizes": "Draw text in other fonts than Roboto. Tick this and submit to show a text box for each text size in pixels. Enter the font family name (for example Tamzen 7x14) in the box of every size your font has. Text is then drawn at the nearest of these sizes, never below the smallest. The fonts must be in the custom font directory above; a font that is not installed there stays in Roboto.",
+              "font_family": "Font family for text larger than the biggest size above, where a scaled bitmap font is still readable. Leave empty to keep Roboto. Only used when Override fonts for specific sizes is on.",
               "dither_algorithm": "Algorithm used to reduce the image to the display's colors. None (nearest color) maps each pixel to the closest available color without dithering; light grays may disappear on black-and-white displays. Black and white (every non-white pixel black) keeps all gray text and lines visible by turning anything that is not pure white black (grayscale displays only; ignored at 256 levels).",
               "measured_palette": "Photographically calibrated palette for your specific display model. Auto uses the idealized palette.",
               "exposure": "1.0 = unchanged, higher = brighter (0.0–10.0)",
@@ -209,7 +226,8 @@
     "error": {
       "already_configured": "This webhook URL is already configured.",
       "invalid_url": "Please enter a valid http or https URL.",
-      "font_dir_not_found": "Directory not found. Please enter a valid path to an existing directory."
+      "font_dir_not_found": "Directory not found. Please enter a valid path to an existing directory.",
+      "invalid_font_family": "Enter a font family name without quotes, commas, semicolons, ampersands, angle brackets or backslashes."
     }
   },
   "selector": {

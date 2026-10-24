@@ -58,7 +58,8 @@ from .const import (
     default_list_row_height,
     resolve_display,
 )
-from .http import EinkLayoutView, EinkPublicImageView
+from .font_overrides import font_options
+from .http import EinkFontView, EinkLayoutView, EinkPublicImageView
 from .store import EinkDashboardStore
 from .svg_render import render_widget_svg
 from .widgets.week_calendar import _week_calendar_entity_ids
@@ -256,7 +257,8 @@ async def _build_display_config(
 
     Returns:
         Dict with ``width``, ``height``, ``row_height``,
-        ``display_levels``, ``font_dir``, ``use_system_fonts``,
+        ``display_levels``, ``font_dir``, ``font_family``,
+        ``font_size_overrides``, ``use_system_fonts``,
         ``number_format``, ``language``, ``first_weekday``,
         ``date_format``, ``time_format``, ``time_zone``,
         ``states``, and (when
@@ -292,7 +294,7 @@ async def _build_display_config(
             "display_levels", DEFAULT_DISPLAY_LEVELS
         ),
         "color_scheme": entry.options.get("color_scheme"),
-        "font_dir": entry.options.get("font_dir", ""),
+        **font_options(entry.options),
         "use_system_fonts": entry.options.get(
             "use_system_fonts", DEFAULT_USE_SYSTEM_FONTS
         ),
@@ -907,6 +909,7 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
 
     hass.http.register_view(EinkPublicImageView())
     hass.http.register_view(EinkLayoutView())
+    hass.http.register_view(EinkFontView())
     await hass.http.async_register_static_paths(
         [
             StaticPathConfig(

@@ -37,6 +37,8 @@ export interface HomeAssistant {
   areas: Record<string, { name: string }>;
   /** Make an authenticated REST API call to HA core. */
   callApi<T = unknown>(method: string, path: string, data?: unknown): Promise<T>;
+  /** `fetch` that adds the logged-in user's credentials; used to download font files. */
+  fetchWithAuth(path: string, init?: RequestInit): Promise<Response>;
   /** Make an authenticated WebSocket command call to HA core. */
   callWS<T = unknown>(msg: Record<string, unknown>): Promise<T>;
   /** Call a HA service. */
@@ -119,6 +121,22 @@ export interface DisplayConfig {
    * list widget has no `row_height`; editor fallback is 56.
    */
   row_height?: number;
+  /**
+   * Font files of the families chosen under "Override fonts for specific
+   * sizes" that the browser has to load to draw the same text as the
+   * server.  Empty or absent when no font is overridden.
+   */
+  fonts?: FontFileInfo[];
+}
+
+/** One font file the browser loads for the SVG preview. */
+export interface FontFileInfo {
+  /** Family name as written in the SVG's `font-family`, e.g. "Tamzen 7x14". */
+  family: string;
+  /** CSS font weight of the file: 400, 500 or 700. */
+  weight: number;
+  /** File name inside the custom font directory, served by the fonts API. */
+  file: string;
 }
 
 /** Static device metadata returned by the `eink_dashboard/layout` WebSocket command. */

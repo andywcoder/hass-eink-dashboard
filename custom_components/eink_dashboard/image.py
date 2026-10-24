@@ -67,6 +67,7 @@ from .const import (
     WidgetType,
     default_list_row_height,
 )
+from .font_overrides import font_options
 from .push import async_push_image
 from .render import render_dashboard
 
@@ -270,7 +271,7 @@ class EinkDashboardImage(ImageEntity):
                         "measured_palette", DEFAULT_MEASURED_PALETTE
                     ),
                     "color_scheme": self._entry.options.get("color_scheme"),
-                    "font_dir": self._entry.options.get("font_dir", ""),
+                    **font_options(self._entry.options),
                     "use_system_fonts": self._entry.options.get(
                         "use_system_fonts", DEFAULT_USE_SYSTEM_FONTS
                     ),

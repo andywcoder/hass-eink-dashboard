@@ -19,6 +19,7 @@ from __future__ import annotations
 import datetime
 from typing import TYPE_CHECKING, Any
 
+from ...font_overrides import drop_missing_glyphs
 from .._helpers import _fmt, _resolve_tz
 
 if TYPE_CHECKING:
@@ -308,10 +309,14 @@ def _truncate_to_width(text: str, font: Any, max_w: float) -> str:
         ``text`` unchanged if it already fits; otherwise the longest
         prefix of ``text`` plus ``"…"`` that fits within ``max_w``.
         Returns an empty string if even a bare ``"…"`` does not fit.
+        A font without a ``"…"`` glyph, typically a bitmap font chosen
+        under "Override fonts for specific sizes", uses ``"."`` instead.
     """
     if round(font.getlength(text)) <= max_w:
         return text
     ellipsis = "…"
+    if drop_missing_glyphs(ellipsis, font) != ellipsis:
+        ellipsis = drop_missing_glyphs(".", font)
     if round(font.getlength(ellipsis)) > max_w:
         return ""
     lo, hi = 0, len(text)

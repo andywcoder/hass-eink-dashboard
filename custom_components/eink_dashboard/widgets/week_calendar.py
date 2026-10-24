@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any
 from babel import Locale, UnknownLocaleError
 
 from ..const import COLOR_LIGHT_GRAY, color_to_hex
+from ..font_overrides import available_sizes
 from ._helpers import (
     _color_context,
     _resolve_tz,
@@ -43,12 +44,22 @@ DEFAULT_END_HOUR = 20
 _MAX_ALL_DAY_LANES = 3
 _MAX_CHIPS = 2
 
-# Event, chip and all-day text uses a small set of fixed pixel sizes
-# instead of scaling with the widget, which keeps small text legible.
-# The start time always uses ``_EV_TIME_SIZE``; a title uses the largest
-# of ``_EV_TITLE_SIZES`` whose text fits its box without being cut.
-_EV_TIME_SIZE = 9
-_EV_TITLE_SIZES = (14, 12)
+# Event, chip and all-day text uses a few fixed pixel sizes instead of
+# scaling with the widget.  That keeps small text legible and lets a
+# pixel-aligned font be chosen for each size under "Override fonts for
+# specific sizes".  Bitmap fonts differ in which sizes they have, so
+# each kind of text has a group of candidate sizes and the fonts the
+# user chose decide which of them exist (see ``available_sizes``; with
+# no override font all candidates exist):
+#
+# - the start time uses the smallest available size of
+#   ``_EV_TIME_SIZES``;
+# - a title uses the largest available size of ``_EV_TITLE_SIZES``
+#   whose text fits its box without being cut, and the smallest
+#   available one when none does.  With a single available size the
+#   title keeps it and is cut instead.
+_EV_TIME_SIZES = (9, 10, 11, 12)
+_EV_TITLE_SIZES = (14, 13, 12, 11)
 
 
 def _ev_line_h(size: int) -> int:
@@ -455,6 +466,9 @@ def _build_week_calendar_context(
     """
     from ..render import _load_font, _weekday_abbrev
 
+    time_size = min(available_sizes(_EV_TIME_SIZES))
+    title_sizes = tuple(sorted(available_sizes(_EV_TITLE_SIZES), reverse=True))
+
     x = widget.get("x", 0)
     y = widget.get("y", 0)
     svg_w = _widget_dim(widget, "w", config["width"] - x)
@@ -500,7 +514,7 @@ def _build_week_calendar_context(
     day_font = round(header_h * 0.55)
     # Boxes are sized for the smallest title font; a roomier box may
     # still draw its title larger (see ``fit_title``).
-    line_h = _ev_line_h(min(_EV_TITLE_SIZES))
+    line_h = _ev_line_h(min(title_sizes))
     hour_font = max(8, round(day_font * 0.8))
     gutter_w = round(hour_font * (3.4 if time_format == "12" else 2.2))
     lane_h = round(day_font * 1.3)
@@ -544,8 +558,8 @@ def _build_week_calendar_context(
         return x0, edge_px(last + 1) - x0 - 1
 
     day_font_obj = _load_font(day_font, medium=True)
-    time_font = _load_font(_EV_TIME_SIZE)
-    title_fonts = {s: _load_font(s) for s in _EV_TITLE_SIZES}
+    time_font = _load_font(time_size)
+    title_fonts = {s: _load_font(s) for s in title_sizes}
 
     def fit_title(
         title: str,
@@ -581,9 +595,9 @@ def _build_week_calendar_context(
         """
         inner_w = w - 6
         time_w = time_font.getlength(label) if label else 0
-        chosen = min(_EV_TITLE_SIZES)
+        chosen = min(title_sizes)
         lines: list[str] = []
-        for size in sorted(_EV_TITLE_SIZES, reverse=True):
+        for size in title_sizes:
             fits = (h - pad) // _ev_line_h(size)
             if max_lines is not None:
                 fits = min(fits, max_lines)
@@ -755,7 +769,7 @@ def _build_week_calendar_context(
         "content_bottom": content_y + content_h,
         "header_h": header_h,
         "day_font": day_font,
-        "time_font_sz": _EV_TIME_SIZE,
+        "time_font_sz": time_size,
         "hour_font": hour_font,
         "gutter_w": gutter_w,
         "grid_top": grid_top,

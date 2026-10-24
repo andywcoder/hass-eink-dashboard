@@ -46,6 +46,7 @@ from .const import (
     NumberFormat,
     Widget,
 )
+from .font_overrides import resolve_font_path, snap_size
 from .optimize import optimize_for_eink
 from .svg_render import (
     _SVG_RENDERERS,
@@ -61,10 +62,16 @@ _FONTS_DIR = Path(__file__).parent / "fonts" / "Roboto"
 def _load_font(
     size: int, medium: bool = False, bold: bool = False
 ) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    """Load Roboto at the given pixel size, falling back to PIL default.
+    """Load the font text of ``size`` is drawn in, at that pixel size.
+
+    This is Roboto unless the user chose another family for this size
+    (see ``font_overrides``) and it is installed in the custom font
+    directory.
 
     Args:
-        size: Font size in pixels (clamped to a minimum of 1).
+        size: Font size in pixels (clamped to a minimum of 1).  With
+            override fonts installed it is snapped to a size that has
+            one, see ``font_overrides.snap_size``.
         medium: When True, load Roboto Medium (weight 500) instead of
             Roboto Regular (weight 400).
         bold: When True, load Roboto Bold (weight 700). Takes
@@ -74,18 +81,31 @@ def _load_font(
         A FreeTypeFont loaded from the TTF file, or the PIL built-in
         default font if the TTF is not found.
     """
-    return _load_font_cached(max(1, size), medium, bold)
+    size = snap_size(max(1, size))
+    return _load_font_cached(
+        size, medium, bold, resolve_font_path(size, medium, bold)
+    )
 
 
 @functools.cache
 def _load_font_cached(
-    size: int, medium: bool, bold: bool = False
+    size: int,
+    medium: bool,
+    bold: bool = False,
+    override_path: str | None = None,
 ) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     """Load a font at the given size (unclamped, cached).
 
     Separated from _load_font so that size=0 and size=1 produce distinct
-    cache entries instead of colliding after the clamp.
+    cache entries instead of colliding after the clamp.  The override
+    path is part of the cache key because it depends on the active font
+    settings, not only on the arguments of ``_load_font``.
     """
+    if override_path:
+        try:
+            return ImageFont.truetype(override_path, size)
+        except OSError:
+            pass
     if bold:
         filename = "Roboto-Bold.ttf"
     elif medium:

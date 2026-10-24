@@ -50,6 +50,11 @@ from .const import (
     WidgetType,
     color_to_hex,
 )
+from .font_overrides import (
+    apply_font_families,
+    font_settings_from_config,
+    use_font_settings,
+)
 
 _hex_white = color_to_hex(COLOR_WHITE)
 
@@ -104,7 +109,8 @@ def _svg_to_png(
     across HA OS, Docker, and dev machines.  Only fonts shipped in the
     ``fonts/`` directory, plus any directories in ``extra_font_dirs``,
     are available to the renderer.  All templates share the single
-    ``font-family="Roboto"`` declaration; when a character has no
+    ``font-family="Roboto"`` declaration (which ``render_widget_svg``
+    can rewrite to a user-chosen family); when a character has no
     glyph in Roboto, resvg falls back to searching every other font
     loaded into its fontdb, so a user-supplied font covering a script
     Roboto lacks (e.g. Hebrew) is picked up automatically without any
@@ -568,6 +574,11 @@ def render_widget_svg(
             renderer.
     """
     wtype = widget["type"]
-    ctx = _SVG_RENDERERS[wtype](widget, config)
-    tmpl = _jinja_env.get_template(f"{wtype}.svg.j2")
-    return tmpl.render(**ctx)
+    settings = font_settings_from_config(config)
+    # The context builders and the template filters measure text with
+    # PIL, so the font choices must be active while they run.
+    with use_font_settings(settings):
+        ctx = _SVG_RENDERERS[wtype](widget, config)
+        tmpl = _jinja_env.get_template(f"{wtype}.svg.j2")
+        svg = tmpl.render(**ctx)
+    return apply_font_families(svg, settings)

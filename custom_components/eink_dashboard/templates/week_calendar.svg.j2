@@ -73,7 +73,7 @@
   dominant-baseline="middle"
   fill="{{ hex_white }}">
 {%- if ln.time -%}
-<tspan font-size="{{ time_font_sz }}">{{ ln.time }}</tspan>{% if ln.text %} {% endif %}
+<tspan font-family="Roboto" font-size="{{ time_font_sz }}">{{ ln.time }}</tspan>{% if ln.text %} {% endif %}
 {%- endif -%}
 {{ ln.text }}</text>
 {%- endfor -%}

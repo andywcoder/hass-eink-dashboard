@@ -35,6 +35,10 @@ image entity and a public HTTP endpoint.
   `_color_context()`, `_widget_dim()`, `_card_insets()`, `_metrics_context()`,
   `_title_layout()`, `_auto_row_height()`, `_fmt()`, `_entity_info_context()`,
   `_ACTIVE_STATES`
+- `font_overrides.py` — optional user-chosen font families per text size:
+  `FontSettings`, `apply_font_families()` (rewrites `font-family` in the
+  rendered SVG) and `resolve_font_path()` (makes `_load_font` measure with
+  the same file); enabled by the "Override fonts for specific sizes" option
 - `image.py` — `EinkDashboardImage` (`ImageEntity`), scheduled refresh, ETag tracking
 - `http.py` — unauthenticated HTTP view at `/api/eink_dashboard/{entry_id}/image.png` with ETag/304 support
 - `store.py` — `EinkDashboardStore`, persists widget list via HA's `Store` (`eink_dashboard.{entry_id}`)

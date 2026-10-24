@@ -15,9 +15,13 @@
 from __future__ import annotations
 
 import hashlib
+import shutil
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+from aiohttp import web
 from homeassistant.components.frontend import (
     DATA_EXTRA_MODULE_URL,
     UrlManager,
@@ -32,6 +36,7 @@ from custom_components.eink_dashboard.const import (
     WidgetType,
 )
 from custom_components.eink_dashboard.http import (
+    EinkFontView,
     EinkLayoutView,
     EinkPublicImageView,
 )
@@ -133,6 +138,89 @@ class TestViewAttributes:
         assert "eink_dashboard" in view.url
         assert "layout" in view.url
         assert view.requires_auth is True
+
+
+class TestEinkFontView:
+    """Tests for the view that serves chosen font files to the card."""
+
+    _ROBOTO_BOLD = (
+        Path(__file__).parent.parent
+        / "custom_components"
+        / "eink_dashboard"
+        / "fonts"
+        / "Roboto"
+        / "Roboto-Bold.ttf"
+    )
+
+    def _request(self, font_dir: Path, **options: Any) -> MagicMock:
+        """Build a request whose entry has the given font options."""
+        entry = MagicMock(
+            options={
+                "font_dir": str(font_dir),
+                "override_font_sizes": True,
+                "font_size_overrides": [{"size": 14, "family": "Roboto"}],
+                **options,
+            }
+        )
+
+        async def run(func: Any, *args: Any) -> Any:
+            """Run the executor job inline."""
+            return func(*args)
+
+        hass = MagicMock()
+        hass.data = {DOMAIN: {"e1": {"entry": entry}}}
+        hass.async_add_executor_job = run
+        request = MagicMock()
+        request.app = {"hass": hass}
+        return request
+
+    @pytest.fixture
+    def font_dir(self, tmp_path: Path) -> Path:
+        """Return a font directory holding one font and one other file."""
+        shutil.copy(self._ROBOTO_BOLD, tmp_path / "Copy.ttf")
+        (tmp_path / "secret.txt").write_text("nope")
+        return tmp_path
+
+    def test_view_attributes(self) -> None:
+        # The font view requires authentication.
+        view = EinkFontView()
+        assert "fonts" in view.url
+        assert view.requires_auth is True
+
+    async def test_serves_chosen_font_file(self, font_dir: Path) -> None:
+        # A file of a chosen family is returned as a font.
+        resp = await EinkFontView().get(
+            self._request(font_dir), "e1", "Copy.ttf"
+        )
+
+        assert resp.status == 200
+        assert resp.content_type == "font/ttf"
+        assert resp.body == (font_dir / "Copy.ttf").read_bytes()
+
+    @pytest.mark.parametrize(
+        "filename", ["secret.txt", "../secret.txt", "missing.ttf"]
+    )
+    async def test_other_files_are_not_found(
+        self, font_dir: Path, filename: str
+    ) -> None:
+        # Only files of chosen families are served, so other files in
+        # the directory and path tricks return 404.
+        with pytest.raises(web.HTTPNotFound):
+            await EinkFontView().get(self._request(font_dir), "e1", filename)
+
+    async def test_not_found_when_overrides_are_off(
+        self, font_dir: Path
+    ) -> None:
+        # With the checkbox off nothing is served, even for a file of
+        # a family that is still stored.
+        request = self._request(font_dir, override_font_sizes=False)
+        with pytest.raises(web.HTTPNotFound):
+            await EinkFontView().get(request, "e1", "Copy.ttf")
+
+    async def test_unknown_entry_is_not_found(self, font_dir: Path) -> None:
+        # An unknown entry ID returns 404.
+        with pytest.raises(web.HTTPNotFound):
+            await EinkFontView().get(self._request(font_dir), "nope", "a.ttf")
 
 
 class TestEinkPublicImageView:
@@ -456,6 +544,7 @@ class TestEinkLayoutView:
             "height": 1024,
             "display_levels": 16,
             "row_height": 56,
+            "fonts": [],
         }
         assert body["device"]["name"] == "Test Dashboard"
         assert body["device"]["model"] == "kindle_pw"

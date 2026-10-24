@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
@@ -30,6 +31,11 @@ from .const import (
     MAX_WIDGETS,
     WidgetType,
     default_list_row_height,
+)
+from .font_overrides import (
+    browser_fonts,
+    font_options,
+    font_settings_from_config,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -69,6 +75,11 @@ class EinkLayoutView(HomeAssistantView):
             entry_data.get("battery_sensor"),
         )
 
+        fonts = await hass.async_add_executor_job(
+            browser_fonts,
+            font_settings_from_config(font_options(entry.options)),
+        )
+
         return web.json_response(
             {
                 "widgets": widgets,
@@ -77,6 +88,7 @@ class EinkLayoutView(HomeAssistantView):
                     "height": height,
                     "display_levels": preset.display_levels,
                     "row_height": default_list_row_height(entry.options),
+                    "fonts": fonts,
                 },
                 "device": {
                     "name": entry.title,
@@ -133,6 +145,47 @@ class EinkLayoutView(HomeAssistantView):
         await entity.async_request_refresh(body)
 
         return web.json_response({"status": "ok"})
+
+
+class EinkFontView(HomeAssistantView):
+    """Authenticated view serving a chosen font file to the card.
+
+    The card shows widget SVGs in the browser, which draws the text
+    itself, so it needs the same font files the server renders with.
+    Only files of the chosen font families are served.
+    """
+
+    url = "/api/eink_dashboard/{entry_id}/fonts/{filename}"
+    name = "api:eink_dashboard:font"
+    requires_auth = True
+
+    async def get(
+        self, request: web.Request, entry_id: str, filename: str
+    ) -> web.Response:
+        """Return the font file ``filename`` from the font directory."""
+        hass = request.app["hass"]
+        entry_data = hass.data.get(DOMAIN, {}).get(entry_id)
+        if entry_data is None:
+            raise web.HTTPNotFound()
+
+        settings = font_settings_from_config(
+            font_options(entry_data["entry"].options)
+        )
+        fonts = await hass.async_add_executor_job(browser_fonts, settings)
+        # Only names the font directory scan produced are served, so
+        # the request cannot reach any other file.
+        if filename not in {f["file"] for f in fonts}:
+            raise web.HTTPNotFound()
+
+        path = Path(settings.font_dir) / filename
+        data = await hass.async_add_executor_job(path.read_bytes)
+        return web.Response(
+            body=data,
+            content_type=(
+                "font/otf" if path.suffix.lower() == ".otf" else "font/ttf"
+            ),
+            headers={"Cache-Control": "private, max-age=300"},
+        )
 
 
 class EinkPublicImageView(HomeAssistantView):
